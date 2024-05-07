@@ -11,28 +11,21 @@ module ethos::game {
     use sui::balance::{Self, Balance};
     use sui::coin::{Self, Coin};
     use sui::pay;
-    use sui::transfer;
-    
+
     use sui::package;
     use sui::display;
 
     use ethos::game_board::{Self, GameBoard8192};
 
     friend ethos::leaderboard;
-
-    #[test_only]
-    friend ethos::game_tests;
-
-    #[test_only]
-    friend ethos::leaderboard_tests;
+    #[test_only] friend ethos::game_tests;
+    #[test_only] friend ethos::leaderboard_tests;
 
     const DEFAULT_FEE: u64 = 200_000_000;
-
     const EInvalidPlayer: u64 = 0;
     const ENotMaintainer: u64 = 1;
     const ENoBalance: u64 = 2;
 
-    /// One-Time-Witness for the module.
     struct game has drop {}
 
     struct Game8192 has key, store {
@@ -83,7 +76,17 @@ module ethos::game {
         score: u64
     }
 
-    fun init(otw: game, ctx: &mut TxContext) {
+    public(friend) fun create_maintainer(ctx: &mut TxContext): Game8192Maintainer {
+        Game8192Maintainer {
+            id: object::new(ctx),
+            maintainer_address: sender(ctx),
+            game_count: 0,
+            fee: DEFAULT_FEE,
+            balance: balance::zero<SUI>()
+        }
+    }
+
+    public entry fun init(otw: game, ctx: &mut TxContext) {
         let keys = vector[
             utf8(b"name"),
             utf8(b"image_url"),
@@ -105,11 +108,7 @@ module ethos::game {
         ];
 
         let publisher = package::claim(otw, ctx);
-
-        let display = display::new_with_fields<Game8192>(
-            &publisher, keys, values, ctx
-        );
-
+        let display = display::new_with_fields<Game8192>(&publisher, keys, values, ctx);
         display::update_version(&mut display);
 
         let maintainer = create_maintainer(ctx);
@@ -119,11 +118,8 @@ module ethos::game {
         transfer::share_object(maintainer);
     }
 
-    // PUBLIC ENTRY FUNCTIONS //
-    
     public entry fun create(maintainer: &mut Game8192Maintainer, fee: vector<Coin<SUI>>, ctx: &mut TxContext) {
         let (paid, remainder) = merge_and_split(fee, maintainer.fee, ctx);
-
         coin::put(&mut maintainer.balance, paid);
         transfer::public_transfer(remainder, tx_context::sender(ctx));
 
@@ -159,6 +155,7 @@ module ethos::game {
     }
 
     public entry fun make_move(game: &mut Game8192, direction: u64, ctx: &mut TxContext)  {
+        assert!(direction >= 0 && direction < 4, EInvalidPlayer); // Ensure valid direction
         let new_board;
         {
             new_board = *&game.active_board;
@@ -176,7 +173,7 @@ module ethos::game {
 
         event::emit(GameMoveEvent8192 {
             game_id: object::uid_to_inner(&game.id),
-            direction: direction,
+            direction,
             move_count,
             packed_spaces: *game_board::packed_spaces(&new_board),
             last_tile: *game_board::last_tile(&new_board),
@@ -201,22 +198,7 @@ module ethos::game {
     }
 
     public entry fun burn_game(game: Game8192)  {
-        let Game8192 {  
-            id,
-            game: _,
-            player: _,
-            active_board: _,
-            move_count: _,
-            score: _,
-            top_tile: _,      
-            game_over: _,
-        } = game;
-        object::delete(id);
-    }
-
-    // Not clear why the top_tile is not being set in the contract properly. This is a temporary fix.
-    public entry fun fix_game(game: &mut Game8192)  {
-        game.top_tile = game_board::analyze_top_tile(&game.active_board);
+        object::delete(game.id);
     }
 
     public entry fun pay_maintainer(maintainer: &mut Game8192Maintainer, ctx: &mut TxContext) {
@@ -235,46 +217,6 @@ module ethos::game {
     public entry fun change_fee(maintainer: &mut Game8192Maintainer, new_fee: u64, ctx: &mut TxContext) {
         assert!(tx_context::sender(ctx) == maintainer.maintainer_address, ENotMaintainer);
         maintainer.fee = new_fee;
-    }
- 
-    // PUBLIC ACCESSOR FUNCTIONS //
-
-    public fun id(game: &Game8192): ID {
-        object::uid_to_inner(&game.id)
-    }
-
-    public fun player(game: &Game8192): &address {
-        &game.player
-    }
-
-    public fun active_board(game: &Game8192): &GameBoard8192 {
-        &game.active_board
-    }
-
-    public fun top_tile(game: &Game8192): &u64 {
-        let game_board = active_board(game);
-        game_board::top_tile(game_board)
-    }
-
-    public fun score(game: &Game8192): &u64 {
-        let game_board = active_board(game);
-        game_board::score(game_board)
-    }
-
-    public fun move_count(game: &Game8192): &u64 {
-        &game.move_count
-    }
-
-    // Friend functions
-
-    public(friend) fun create_maintainer(ctx: &mut TxContext): Game8192Maintainer {
-        Game8192Maintainer {
-            id: object::new(ctx),
-            maintainer_address: sender(ctx),
-            game_count: 0,
-            fee: DEFAULT_FEE,
-            balance: balance::zero<SUI>()
-        }
     }
 
     fun merge_and_split(
