@@ -29,13 +29,7 @@ module ethos::leaderboard {
         score: u64
     }
 
-    fun init(ctx: &mut TxContext) {
-        create(ctx);
-    }
-
-    // ENTRY FUNCTIONS //
-
-    public entry fun create(ctx: &mut TxContext) {
+    public entry fun init(ctx: &mut TxContext) {
         let leaderboard = leaderboard8192 {
             id: object::new(ctx),
             max_leaderboard_game_count: 50,
@@ -47,12 +41,12 @@ module ethos::leaderboard {
         transfer::share_object(leaderboard);
     }
 
-    public entry fun submit_game(game: &mut Game8192, leaderboard: &mut leaderboard8192) {
+    public entry fun submit_game(game: &Game8192, leaderboard: &mut leaderboard8192) {
         let top_tile = *game::top_tile(game);
         let score = *game::score(game);
 
         assert!(top_tile >= leaderboard.min_tile, ELowTile);
-        assert!(score > leaderboard.min_score, ELowScore);
+        assert!(score >= leaderboard.min_score, ELowScore);
 
         let leader_address = *game::player(game);
         let game_id = game::id(game);
@@ -60,12 +54,91 @@ module ethos::leaderboard {
         let top_game = TopGame8192 {
             game_id,
             leader_address,
-            score: *game::score(game),
-            top_tile: *game::top_tile(game)
+            score,
+            top_tile
         };
 
         add_top_game_sorted(leaderboard, top_game);
     }
+
+    fun add_top_game_sorted(leaderboard: &mut leaderboard8192, top_game: TopGame8192) {
+        vector::remove_all(&mut leaderboard.top_games, |tg| tg.game_id == top_game.game_id);
+        vector::push_back(&mut leaderboard.top_games, top_game);
+
+        let sorted_games = merge_sort_top_games(&leaderboard.top_games);
+        leaderboard.top_games = vector::truncate(&sorted_games, leaderboard.max_leaderboard_game_count);
+
+        update_min_values(leaderboard);
+    }
+
+    fun update_min_values(leaderboard: &mut leaderboard8192) {
+        if (vector::length(&leaderboard.top_games) == leaderboard.max_leaderboard_game_count) {
+            let bottom_game = vector::borrow(&leaderboard.top_games, vector::length(&leaderboard.top_games) - 1);
+            leaderboard.min_tile = bottom_game.top_tile;
+            leaderboard.min_score = bottom_game.score;
+        }
+    }
+
+    fun merge_sort_top_games(top_games: &vector<TopGame8192>): vector<TopGame8192> {
+    let length = vector::length(top_games);
+    if (length <= 1) {
+        return vector::copy(top_games);
+    }
+
+    let mid = length / 2;
+    let mut left = vector::empty<TopGame8192>();
+    let mut right = vector::empty<TopGame8192>();
+
+    // Splitting the vector into two halves
+    for i in 0..mid {
+        vector::push_back(&mut left, vector::borrow(top_games, i));
+    }
+    for i in mid..length {
+        vector::push_back(&mut right, vector::borrow(top_games, i));
+    }
+
+    // Recursively sort each half
+    let sorted_left = merge_sort_top_games(&left);
+    let sorted_right = merge_sort_top_games(&right);
+
+    // Merge the sorted halves
+    return merge(&sorted_left, &sorted_right);
+}
+
+fun merge(left: &vector<TopGame8192>, right: &vector<TopGame8192>): vector<TopGame8192> {
+    let mut result = vector::empty<TopGame8192>();
+    let mut i = 0;
+    let mut j = 0;
+
+    while (i < vector::length(left) && j < vector::length(right)) {
+        let left_game = vector::borrow(left, i);
+        let right_game = vector::borrow(right, j);
+
+        // Compare based on top_tile first, then score if tiles are equal
+        if (left_game.top_tile > right_game.top_tile ||
+            (left_game.top_tile == right_game.top_tile && left_game.score > right_game.score)) {
+            vector::push_back(&mut result, vector::copy(left_game));
+            i += 1;
+        } else {
+            vector::push_back(&mut result, vector::copy(right_game));
+            j += 1;
+        }
+    }
+
+    // Collect any remaining games in the left vector
+    while (i < vector::length(left)) {
+        vector::push_back(&mut result, vector::copy(vector::borrow(left, i)));
+        i += 1;
+    }
+
+    // Collect any remaining games in the right vector
+    while (j < vector::length(right)) {
+        vector::push_back(&mut result, vector::copy(vector::borrow(right, j)));
+        j += 1;
+    }
+
+    return result;
+}
 
     // PUBLIC ACCESSOR FUNCTIONS //
 
